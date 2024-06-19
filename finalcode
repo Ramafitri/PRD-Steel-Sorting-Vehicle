@@ -1,0 +1,517 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WebSocketsServer.h>
+
+// Wi-Fi credentials
+const char* ssid = "ramaganten";
+const char* password = "rama1234";
+
+// GPIO Pins
+const int output = 2;
+const int output2 = 4;
+const int buttonPin = 23;
+const int buttonPin2 = 22;
+const int ENA = 27;
+
+// Timing Variables
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 250;
+unsigned long loopStart;
+unsigned long delayInterval = 2000;
+unsigned long delayStartTime; 
+
+// State Variables
+bool state = true;
+bool state2 = false;
+int motorState = HIGH;
+int motorState2 = LOW;
+const int speedDutyCycle = 200;
+int counter = 0;
+int delayCounter = 0;
+int loopCounter = 0;
+bool startState = false;
+int mode = 1;
+
+// Web Server and WebSocket Server
+WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+// Web Page Content
+const char webpageCode[] PROGMEM = R"=====(
+<!DOCTYPE html>
+<html> 
+    <head>
+        <title>ESP32controlpanel</title>
+
+        <style> 
+            body {
+                background-color: black;
+            }
+            
+            .working-panel {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background-color: white; 
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                width: 90%;
+                height : 80%;
+                border-radius: 50px;
+                display: flex; 
+                flex-direction: column; 
+                align-items: center; 
+            }
+
+            p {
+                color:rgb(76, 4, 75);
+                font-family: 'Roboto Mono', monospace;
+                font-optical-sizing: auto;
+                font-weight: 300;
+                font-style: normal;
+                text-align: center;
+                position: relative;
+                font-size: 50px;
+                font-family: 'Brush Script MT', cursive;
+                vertical-align: top;
+                margin-top: 25px;
+                margin-bottom: 0;
+            }
+            .p1 {
+                color:rgb(115, 4, 143);
+                margin-top: 0;
+                font-family: 'Roboto Mono', monospace;
+                font-optical-sizing: auto;
+                font-size: 20px;
+                letter-spacing: 3px;
+            }
+
+            .mode-panel {
+                display: grid;
+                grid-template-columns: 150px 75px 75px;
+                width: 300px; 
+                margin: 0 auto; 
+                margin-top: 80px; 
+            }
+
+            .mode-panel-text {
+                color:rgb(0, 0, 0);
+                font-weight: 500;
+                font-family: 'Roboto Mono', monospace;
+                font-size: 20px;
+                vertical-align: top;
+                margin-top:0px ;
+            }
+
+            #mode-button1 {
+                margin-bottom: 5px;
+                height: 30px;
+                width: 30px;
+                border-radius: 50%;
+                border: 2px solid black;
+                background-color: rgb(255, 94, 94);
+                display: flex;
+                flex-direction: column; 
+                align-items: center;
+                transition: 100ms ;
+            }
+            #mode-button2 {
+                margin-bottom: 5px;
+                height: 30px;
+                width: 30px;
+                border-radius: 50%;
+                border: 2px solid black;
+                background-color: rgb(255, 94, 94);
+                display: flex;
+                flex-direction: column; 
+                align-items: center;
+            }
+
+            #mode-button1::after,
+            #mode-button2::after {
+                content: attr(data-label); 
+                font-size: 20px; 
+            }
+
+            #mode-button1:hover {
+                opacity: 75%;
+            }
+            #mode-button2:hover {
+                opacity: 75%;
+            }
+
+            #activation_button {
+                width: 150px;
+                height: 50px;
+                background-color: rgb(255, 94, 94);
+                margin-top: 20px;
+                border-radius: 20px;
+                vertical-align: top;
+                margin-top: 20px;
+
+                font-size: 20px; 
+                font-weight: 300;
+                font-family: 'Roboto Mono', monospace;
+                letter-spacing: 2px;
+            }
+
+            #activation_button:hover {
+                opacity: 75%;
+            }
+
+            .timer-panel{
+                display: grid;
+                grid-template-columns: 150px 150px;
+                width: 300px; 
+                margin-top: 30px;
+
+            }
+
+            .timer-text {
+                font-family: 'Roboto Mono', monospace;
+                font-size: 20px;
+                margin-top: 0px;
+                letter-spacing: 1.5px;
+                text-align: right;
+                margin-left: 20px ;
+            }
+            
+            #timernumber_text {
+                font-family: 'Roboto Mono', monospace;
+                font-size: 20px;
+                margin-top: 0px;
+                letter-spacing: 1.5px;
+                text-align: left;
+                margin-left: 20px ;
+            }
+
+        </style>
+    </head>
+        
+    <body>
+        <div class='working-panel'>
+            <p>Steel-Sorting Vehicle</p>
+            <p class='p1'>Control Panel</p>
+            
+            <div class='mode-panel'>
+                <div>
+                    <p class='mode-panel-text'>Mode :</p>
+                </div>
+                <div>
+                    <button id='mode-button1' data-label='1'></button>
+                </div>
+                <div>
+                    <button id='mode-button2' data-label='2'></button>
+                </div>
+            </div>
+
+            <div>
+                <button id='activation_button' onclick='startbtn()'>OFF</button>
+            </div>
+
+            <div class='timer-panel'>
+                <div>
+                    <p class='timer-text'>Timer  : </p>
+                    </div>
+                <div>
+                    <p id='timernumber_text'>00:00:00</p>
+                </div>
+            </div>
+
+        </div>
+
+        <script>
+            var md_button1 = document.getElementById('mode-button1');
+            var md_button2 = document.getElementById('mode-button2');
+            var act_button = document.getElementById('activation_button');
+
+            const timernumber_text = document.getElementById('timernumber_text'); 
+            
+            let timer = null;
+            let startTime = 0;
+            let elapsedTime = 0;
+            let isRunning = false;
+            let mode_system = '1';
+            let activation_button_state;
+
+            var websock;
+
+            init()
+            function init(){
+                websock = new WebSocket('ws://'+ window.location.hostname +':81/');
+                websock.onmessage = function(evt){
+                    processCommand(evt);
+                }
+            }
+
+            function processCommand(evt){
+                var JSONobj = JSON.parse(evt.data);
+                act_button.innerHTML = JSONobj.startState;
+                act_button.style.backgroundColor = 'rgb(255, 94, 94)';
+                
+                clearInterval(timer);
+                elapsedTime = Date.now() - startTime;
+                isRunning = false;
+                
+                startTime = 0
+                elapsedTime = 0;
+            }
+            
+            md_button1.addEventListener('click', function() {
+                if (md_button2.style.backgroundColor === 'rgb(95, 255, 92)'){
+                    md_button2.style.backgroundColor = 'rgb(255, 94, 94)';
+                    md_button1.style.backgroundColor = 'rgb(95, 255, 92)';
+                } else {
+                    md_button1.style.backgroundColor = 'rgb(95, 255, 92)';
+                }
+            });
+
+            md_button2.addEventListener('click', function() {
+                if (md_button1.style.backgroundColor === 'rgb(95, 255, 92)'){
+                    md_button1.style.backgroundColor = 'rgb(255, 94, 94)';
+                    md_button2.style.backgroundColor = 'rgb(95, 255, 92)';
+                } else {
+                    md_button2.style.backgroundColor = 'rgb(95, 255, 92)';
+                }
+            });
+
+            function startbtn(){
+                if (websock.readyState === WebSocket.OPEN) {
+                    act_button.innerHTML = 'ON';
+                    act_button.style.backgroundColor = 'rgb(95, 255, 92)';
+                    
+                    if (md_button1.style.backgroundColor === 'rgb(95, 255, 92)'){
+                      mode_system = '1';
+                    }else{
+                      mode_system = '2';
+                    }
+
+                    activation_button_state = '1=' + mode_system;
+                    websock.send(activation_button_state);
+
+                    if(!isRunning){
+                        startTime = Date.now() - elapsedTime;
+                        timer = setInterval(update, 10);
+                        isRunning = true;
+                        
+
+                        timernumber_text.textContent = '00:00:00';
+                    } else {
+                        clearInterval(timer);
+                        elapsedTime = Date.now() - startTime;
+                        isRunning = false;
+                        
+                        startTime = 0
+                        elapsedTime = 0;
+                    }
+
+                } else {
+                    console.log('WebSocket not connected yet.');
+                }
+              }
+
+            function update(){
+                const currentTime = Date.now()
+                elapsedTime = currentTime - startTime;
+
+                let minutes = Math.floor(elapsedTime / (1000 * 60) % 60);
+                let seconds = Math.floor(elapsedTime /1000 % 60);
+                let milliseconds = Math.floor(elapsedTime % 1000 / 10);
+
+                minutes = String(minutes).padStart(2,'0');
+                seconds = String(seconds).padStart(2,'0');
+                milliseconds = String(milliseconds).padStart(2,'0');
+
+                timernumber_text.textContent = `${minutes}:${seconds}:${milliseconds}`;
+            }
+
+            websock.onopen = function() {
+                console.log('WebSocket connection established.');
+            }
+
+            window.onload = init;
+          </script>
+    </body>
+</html>
+)=====";
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(output, OUTPUT);
+  pinMode(output2, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(buttonPin2, INPUT_PULLUP);
+
+  connectToWiFi();
+  configureWebServer();
+  configureWebSocket();
+  configurePWM();
+}
+
+void loop() {
+  webSocket.loop();
+  server.handleClient();
+
+  int buttonState = digitalRead(buttonPin);
+  int buttonState2 = digitalRead(buttonPin2);
+
+  if (startState) {
+    if (mode == 1) {
+      handleMode1(buttonState, buttonState2);
+    } else if (mode == 2) {
+      handleMode2(buttonState, buttonState2);
+    }
+  }
+}
+
+void connectToWiFi() {
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  WiFi.mode(WIFI_STA);
+  Serial.println();
+  Serial.print("Local IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void configureWebServer() {
+  server.on("/", []() {
+    server.send(200, "text/html", webpageCode);
+  });
+  server.begin();
+}
+
+void configureWebSocket() {
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+}
+
+void configurePWM() {
+  ledcSetup(0, 5000, 8);
+  ledcAttachPin(ENA, 0);
+}
+
+void handleMode1(int buttonState, int buttonState2) {
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (counter == 0) {
+      motorState = HIGH;
+      counter++;
+    }
+
+    if (!buttonState && state) {
+      Serial.println("STOP1");
+      state = false;
+      motorState = LOW;
+      loopStart = millis();
+    }
+
+    if (!buttonState2 && state2) {
+      Serial.println("Button2 low and SUCCESS");
+      motorState2 = LOW;
+      resetState();
+      notifyClients();
+    }
+
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - loopStart > 2000) && (state == state2)) {
+    state2 = true;
+    motorState2 = HIGH;
+    Serial.println("Change State Success");
+  }
+
+  digitalWrite(output, motorState);
+  digitalWrite(output2, motorState2);
+  ledcWrite(0, speedDutyCycle);
+}
+
+void handleMode2(int buttonState, int buttonState2) {
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (counter == 0) {
+      motorState = HIGH;
+      counter++;
+    }
+
+    if (!buttonState && state) {
+      Serial.println("STOP1");
+      state = false;
+      motorState = LOW;
+      loopStart = millis();
+    }
+
+    if (!buttonState2 && state2) {
+      Serial.println("Button2 low");
+      motorState2 = LOW;
+
+      if (delayCounter == 0) {
+        delayStartTime = millis();
+        delayCounter++;
+      }
+
+      if (loopCounter >= 2) {
+        Serial.println("Loop Stopped and Success");
+        loopCounter = 0;
+        resetState();
+        notifyClients();
+      }
+    }
+
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - delayStartTime > delayInterval) && (delayCounter == 1)) {
+    Serial.println("INTERVAL DELAY");
+    resetState();
+    loopCounter++;
+  }
+
+  if ((millis() - loopStart > 2000) && (state == state2)) {
+    state2 = true;
+    motorState2 = HIGH;
+    Serial.println("Change State Success");
+  }
+
+  digitalWrite(output, motorState);
+  digitalWrite(output2, motorState2);
+  ledcWrite(0, speedDutyCycle);
+}
+
+void resetState() {
+  state2 = false;
+  state = true;
+  counter = 0;
+  delayCounter = 0;
+}
+
+void notifyClients() {
+  startState = false;
+  String JSONtxt = "{\"startState\":\"OFF\"}";
+  webSocket.broadcastTXT(JSONtxt);
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {
+  if (type == WStype_TEXT) {
+    String payloadString = (const char *)payload;
+    Serial.print("payloadString= ");
+    Serial.println(payloadString);
+
+    int separator = payloadString.indexOf("=");
+    String startVal = payloadString.substring(0, separator);
+    String modeVal = payloadString.substring(separator + 1);
+    
+    Serial.print("startVal = ");
+    Serial.println(startVal);
+    Serial.print("modeVal = ");
+    Serial.println(modeVal);
+    Serial.println();
+
+    if (startVal == "1") {
+      startState = true;
+      mode = modeVal.toInt();
+    }
+  }
+}
